@@ -119,10 +119,12 @@ namespace CityLife
         void ReleaseAll(bool returnHome);
         void QueueMutation(std::string const& sql, uint32 gmGuidLow = 0, std::string const& successMsg = "");
         void RemoveUnavailableResidents();
+        void RemoveResident(uint32 guidLow);
         void MaintainPopulation();
         void MaintainResidents();
         void RelocateResident(Resident& resident, Hub const& hub);
 
+        void TryNativeService(Player* player, Resident& resident, uint32 now) const;
         void ApplyCityStrategies(Player* player, Resident& resident) const;
         void SetStayPosition(Player* player, Resident& resident) const;
         void RestoreResidentState(Player* player, Resident const& resident) const;
@@ -136,7 +138,10 @@ namespace CityLife
         bool HandleSpotCommand(ChatHandler* handler, std::vector<std::string> const& args);
         bool HandleDebugCommand(ChatHandler* handler, std::vector<std::string> const& args);
 
+        std::mutex _departureMutex;
+        std::unordered_set<uint32> _departures;
         bool _enable = true;
+        bool _nativeRpg = true;
         bool _databaseReady = false;
         bool _debug = false;
         uint32 _startupDelaySeconds = 90;

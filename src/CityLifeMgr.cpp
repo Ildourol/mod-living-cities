@@ -8,14 +8,17 @@
 #include "CityLifeActivities.h"
 #include "CityLifeDialogues.h"
 #include "CityLifeMovement.h"
+#include "CityLifeNativePolicy.h"
 #include "CityLifePopulation.h"
 #include "Item.h"
 #include "StringFormat.h"
 #include "LifeBotReservation.h"
+#include "LifeTelemetryBridge.h"
 
 #include "AreaDefines.h"
 #include "Chat.h"
 #include "Config.h"
+#include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "GameTime.h"
@@ -37,6 +40,7 @@
 #include "SocialMgr.h"
 #include "SpellInfo.h"
 #include "SpellMgr.h"
+#include "TravelMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
@@ -51,6 +55,22 @@
 
 namespace
 {
+    bool IsInHub(Player const* player, CityLife::Hub const& hub)
+    {
+        if (!player || !hub.ZoneId || player->GetMapId() != hub.MapId || player->GetTransport() || player->GetVehicle() ||
+            (player->GetZoneId() != hub.ZoneId && player->GetAreaId() != hub.ZoneId))
+            return false;
+        AreaTableEntry const* area = sAreaTableStore.LookupEntry(hub.ZoneId);
+        if (area && (area->flags & AREA_FLAG_CAPITAL))
+            return true;
+
+        // Towns can share an outdoor zone. Require proximity to the town's points of interest.
+        return std::any_of(hub.Spots.begin(), hub.Spots.end(), [player](CityLife::Spot const& spot)
+        {
+            return player->GetExactDist(spot.X, spot.Y, spot.Z) <= 100.0f;
+        });
+    }
+
     constexpr float TwoPi = 6.28318530718f;
     constexpr uint32 ReservationSeconds = 20 * MINUTE;
     constexpr uint32 ReservationRefreshSeconds = 10 * MINUTE;
@@ -186,12 +206,13 @@ namespace CityLife
     {
         CancelAdmissions();
         ++_dataGeneration;
-        bool wasEnabled = _enable;
         bool enabled = sConfigMgr->GetOption<bool>("CityLife.Enable", true);
-        if (wasEnabled && !enabled && !_residents.empty())
-            ReleaseAll(true);
+        bool nativeRpg = sConfigMgr->GetOption<bool>("CityLife.Strategies.NativeRpg", true);
+        if ((!enabled || nativeRpg != _nativeRpg) && !_residents.empty())
+            ReleaseAll(!enabled);
 
         _enable = enabled;
+        _nativeRpg = nativeRpg;
         _debug = sConfigMgr->GetOption<bool>("CityLife.Debug", false);
         _startupDelaySeconds = sConfigMgr->GetOption<uint32>("CityLife.StartupDelaySeconds", 90);
         _tickSeconds = std::clamp<uint32>(sConfigMgr->GetOption<uint32>("CityLife.TickSeconds", 10), 5, 60);
@@ -764,6 +785,12 @@ namespace CityLife
 
     void Manager::DisengageResident(uint32 guidLow)
     {
+        std::lock_guard<std::mutex> lock(_departureMutex);
+        _departures.insert(guidLow);
+    }
+
+    void Manager::RemoveResident(uint32 guidLow)
+    {
         auto it = std::find_if(_residents.begin(), _residents.end(),
             [&](Resident const& r) { return r.Bot.GuidLow == guidLow; });
 
@@ -832,6 +859,8 @@ namespace CityLife
             Player* player = FindPlayer(guidLow);
             if (!player || player->GetLevel() < hub.MinLevel || player->GetLevel() > hub.MaxLevel)
                 continue;
+            if (_nativeRpg && (!IsInHub(player, hub) || player->GetGroup()))
+                continue;
             if (!IsCandidate(player))
                 continue;
             if (player->GetZoneId() == AREA_WINTERGRASP)
@@ -843,11 +872,11 @@ namespace CityLife
             candidate.Name = player->GetName();
             candidate.Level = player->GetLevel();
             candidate.Race = player->getRace();
-            candidate.Team = TeamForRace(candidate.Race);
+            candidate.Team = player->GetTeamId() == TEAM_ALLIANCE ? TeamSide::Alliance : TeamSide::Horde;
             if (hub.Team != TeamSide::Any && candidate.Team != hub.Team)
                 continue;
 
-            if (player->GetMapId() == hub.MapId && hub.ZoneId != 0 && player->GetZoneId() == hub.ZoneId)
+            if (_nativeRpg || (player->GetMapId() == hub.MapId && hub.ZoneId != 0 && player->GetZoneId() == hub.ZoneId))
                 localZoneCandidates.push_back(candidate);
             else if (player->GetMapId() == hub.MapId)
                 localMapCandidates.push_back(candidate);
@@ -1687,9 +1716,7 @@ namespace CityLife
     {
         if (player && player->GetSession() && player->GetSession()->IsHeadless())
         {
-            uint32 guid = player->GetGUID().GetCounter();
-            if (IsResident(guid))
-                DisengageResident(guid);
+            DisengageResident(player->GetGUID().GetCounter());
         }
     }
 
@@ -1882,9 +1909,12 @@ namespace CityLife
     bool Manager::AdmitResident(Hub const& hub, BotCandidate const& bot, PlayerbotsLife::LeaseToken token)
     {
         Player* player = FindPlayer(bot.GuidLow);
-        Spot const* spot = ChooseSpot(hub);
-        if (!hub.Enabled || !spot || !IsResidentUsable(player) || player->IsInCombat() ||
-            player->IsBeingTeleported() || token.GuidLow != bot.GuidLow ||
+        Spot const* spot = _nativeRpg ? nullptr : ChooseSpot(hub);
+        if (!hub.Enabled || (!_nativeRpg && !spot) || !IsResidentUsable(player) || player->IsInCombat() ||
+            player->IsBeingTeleported() || player->GetLevel() < hub.MinLevel || player->GetLevel() > hub.MaxLevel ||
+            (hub.Team != TeamSide::Any && hub.Team != (player->GetTeamId() == TEAM_ALLIANCE ?
+                TeamSide::Alliance : TeamSide::Horde)) ||
+            (_nativeRpg && (!IsInHub(player, hub) || player->GetGroup())) || token.GuidLow != bot.GuidLow ||
             token.Owner != PlayerbotsLife::ReservationOwner::CityLife ||
             !PlayerbotsLife::ValidateLeaseState(token, PlayerbotsLife::LeaseState::Provisional) ||
             !PlayerbotsLife::PromoteLease(token))
@@ -1897,8 +1927,22 @@ namespace CityLife
         resident.OriginalY = player->GetPositionY();
         resident.OriginalZ = player->GetPositionZ();
         resident.OriginalO = player->GetOrientation();
-        AssignSpot(resident, hub, *spot, true);
-        if (!Movement::ValidateCityDestination(player, hub.MapId, resident.TargetX, resident.TargetY, resident.TargetZ, resident.TargetO, spot->PoiType == CityPoiType::Dock))
+        resident.NativeRpg = _nativeRpg;
+        if (resident.NativeRpg)
+        {
+            resident.HubId = hub.Id;
+            resident.TargetMap = hub.MapId;
+            resident.TargetX = resident.OriginalX;
+            resident.TargetY = resident.OriginalY;
+            resident.TargetZ = resident.OriginalZ;
+            resident.TargetO = resident.OriginalO;
+            resident.Activity = CitizenActivity::WanderDistrict;
+            resident.ActivityStartMs = GameTimeMS();
+        }
+        else
+            AssignSpot(resident, hub, *spot, true);
+        if (spot && !Movement::ValidateCityDestination(player, hub.MapId, resident.TargetX, resident.TargetY,
+            resident.TargetZ, resident.TargetO, spot->PoiType == CityPoiType::Dock))
         {
             if (_debug)
                 LOG_WARN("module", "[CityLife] AdmitResident: Spot '{}/{}' rejected by ValidateCityDestination.", hub.Name, spot->Name);
@@ -1906,18 +1950,21 @@ namespace CityLife
         }
 
         uint32 now = GameTimeSeconds();
-        resident.NextMoveAt = now + urand(_relocateMinSeconds, _relocateMaxSeconds);
+        resident.NextMoveAt = resident.NativeRpg ? now : now + urand(_relocateMinSeconds, _relocateMaxSeconds);
         resident.NextEmoteAtMs = GameTimeMS() + urand(_emoteMinSeconds, _emoteMaxSeconds) * 1000;
         resident.NextReservationRefreshAt = now + ReservationRefreshSeconds;
         resident.ReleaseAt = hub.ResidenceSeconds == 0 ? 0 : now + hub.ResidenceSeconds;
         resident.LastSweepZ = resident.TargetZ;
         ApplyCityStrategies(player, resident);
-        SetStayPosition(player, resident);
-        if (sRandomPlayerbotMgr.IsRandomBot(player))
-            sRandomPlayerbotMgr.ScheduleTeleport(bot.GuidLow, std::max(ReservationSeconds, hub.ResidenceSeconds + MINUTE));
-        Movement::MoveToPosition(player, hub.MapId, resident.TargetX, resident.TargetY, resident.TargetZ, resident.TargetO, true);
-        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
-            ai->HandleTeleportAck();
+        if (!resident.NativeRpg)
+        {
+            SetStayPosition(player, resident);
+            if (sRandomPlayerbotMgr.IsRandomBot(player))
+                sRandomPlayerbotMgr.ScheduleTeleport(bot.GuidLow, std::max(ReservationSeconds, hub.ResidenceSeconds + MINUTE));
+            Movement::MoveToPosition(player, hub.MapId, resident.TargetX, resident.TargetY, resident.TargetZ, resident.TargetO, true);
+            if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
+                ai->HandleTeleportAck();
+        }
         _residents.push_back(resident);
         ++_hubResidentCounts[resident.HubId];
         ++_changesThisTick;
@@ -1985,7 +2032,7 @@ namespace CityLife
         if (std::none_of(_releasingResidents.begin(), _releasingResidents.end(),
             [&](ReleasingResident const& pending) { return pending.Actor.Token.Generation == resident.Token.Generation; }))
         {
-            _releasingResidents.push_back({ resident, returnHome, GameTimeSeconds(), 0 });
+            _releasingResidents.push_back({ resident, returnHome && !resident.NativeRpg, GameTimeSeconds(), 0 });
             _releasingDirty = true;
         }
     }
@@ -2003,6 +2050,10 @@ namespace CityLife
             bool isHuman = player && IsHumanControlled(player);
             bool timedOut = (pending->ReleaseStartedAt != 0 && (now - pending->ReleaseStartedAt >= 30)) || (pending->Attempts > 15);
             bool relinquish = !owned || !player || isHuman || isShutdown || timedOut;
+            bool canReturn = pending->ReturnHome && player && player->IsInWorld() && player->IsAlive() &&
+                !player->IsBeingTeleported() && !player->IsInCombat() && !player->duel && !player->GetGroup() &&
+                !player->IsInFlight() && !player->InBattleground() && !player->InBattlegroundQueue() &&
+                player->GetMap() && !player->GetMap()->Instanceable();
 
             if (!relinquish)
             {
@@ -2019,9 +2070,9 @@ namespace CityLife
                 Activities::CrowdClearAfk(player);
                 Activities::CrowdReleaseChat(player, resident);
                 RestoreResidentState(player, resident);
-                if (sRandomPlayerbotMgr.IsRandomBot(player))
+                if (!resident.NativeRpg && sRandomPlayerbotMgr.IsRandomBot(player))
                     sRandomPlayerbotMgr.ScheduleTeleport(resident.Bot.GuidLow);
-                if (pending->ReturnHome && player->IsAlive())
+                if (canReturn)
                     Movement::MoveToPosition(player, resident.OriginalMap, resident.OriginalX,
                         resident.OriginalY, resident.OriginalZ, resident.OriginalO, true);
                 ++_changesThisTick;
@@ -2034,7 +2085,7 @@ namespace CityLife
                     Activities::CrowdClearAfk(player);
                     Activities::CrowdReleaseChat(player, resident);
                     RestoreResidentState(player, resident);
-                    if (!player->IsInCombat() && !player->IsBeingTeleported() && pending->ReturnHome && player->IsAlive())
+                    if (canReturn)
                         Movement::MoveToPosition(player, resident.OriginalMap, resident.OriginalX,
                             resident.OriginalY, resident.OriginalZ, resident.OriginalO, true);
                 }
@@ -2077,7 +2128,8 @@ namespace CityLife
                 !player->IsInCombat() && !player->IsBeingTeleported();
 
             // Rest & Sleep Sequence: if expired and not yet resting, transition to ReleaseCycle at inn bed
-            if (residenceExpired && resident->Activity != CitizenActivity::ReleaseCycle && _actReturnToInn && hub)
+            if (!resident->NativeRpg && residenceExpired && IsResidentUsable(player) &&
+                resident->Activity != CitizenActivity::ReleaseCycle && _actReturnToInn && hub)
             {
                 if (Spot const* restSpot = FindInnBedSpot(*hub))
                 {
@@ -2093,12 +2145,17 @@ namespace CityLife
                 }
             }
 
-            if (!hub || !IsResidentUsable(player) || residenceExpired)
+            bool leftNativeContext = resident->NativeRpg && (!hub || !IsInHub(player, *hub) ||
+                player->GetGroup() || player->IsInCombat() || player->IsBeingTeleported());
+            if (!hub || !hub->Enabled || !IsResidentUsable(player) || residenceExpired || leftNativeContext ||
+                !PlayerbotsLife::ValidateActiveLease(resident->Token))
             {
-                if (player && player->getStandState() == UNIT_STAND_STATE_SLEEP)
-                    player->SetStandState(UNIT_STAND_STATE_STAND);
-                if (player)
+                if (!resident->NativeRpg && player && !IsHumanControlled(player))
+                {
+                    if (player->getStandState() == UNIT_STAND_STATE_SLEEP)
+                        player->SetStandState(UNIT_STAND_STATE_STAND);
                     player->HandleEmoteCommand(EMOTE_ONESHOT_NONE);
+                }
 
                 auto countIt = _hubResidentCounts.find(resident->HubId);
                 if (countIt != _hubResidentCounts.end() && countIt->second > 0)
@@ -2312,6 +2369,14 @@ namespace CityLife
                 !PlayerbotsLife::ValidateActiveLease(resident.Token) ||
                 !IsResidentUsable(player))
                 continue;
+
+            if (resident.NativeRpg)
+            {
+                if (_enableInteractions && IsInHub(player, *hub) && !player->GetGroup() &&
+                    !player->IsInCombat() && !player->IsBeingTeleported() && !player->isMoving())
+                    TryNativeService(player, resident, nowSec);
+                continue;
+            }
 
             if (player->IsBeingTeleported())
             {
@@ -2597,6 +2662,91 @@ namespace CityLife
         }
     }
 
+    void Manager::TryNativeService(Player* player, Resident& resident, uint32 now) const
+    {
+        PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+        if (now < resident.NextMoveAt || !ai->HasStrategy("rpg", BOT_STATE_NON_COMBAT) ||
+            !ai->AllowActivity(RPG_ACTIVITY) || player->GetTradeData() || player->IsPetInCombat() ||
+            player->IsNonMeleeSpellCast(false))
+            return;
+
+        auto* context = ai->GetAiObjectContext();
+        auto* targetValue = context->GetValue<GuidPosition>("rpg target");
+        GuidPosition target = targetValue->Get();
+        bool needsSell = _actFoodVendor && context->GetValue<bool>("should sell")->Get() &&
+            context->GetValue<bool>("can sell")->Get();
+        if (!target.IsCreature())
+        {
+            TravelTarget* travel = context->GetValue<TravelTarget*>("travel target")->Get();
+            if (target || !context->GetValue<bool>("can move around")->Get() ||
+                (travel && travel->getStatus() == TRAVEL_STATUS_TRAVEL))
+                return;
+
+            bool needsRepair = context->GetValue<bool>("should repair")->Get() &&
+                context->GetValue<bool>("can repair")->Get();
+            if (!needsSell && !needsRepair)
+                return;
+
+            // Offer local errands only when the native selector has no target.
+            // The RPG engine still owns movement, cancellation and its ignore list.
+            resident.NextMoveAt = now + 30;
+            auto const& ignored = context->GetValue<GuidSet&>("ignore rpg target")->Get();
+            Creature* nearest = nullptr;
+            float nearestDistance = NativeServiceRadius;
+            bool nearestRepairs = false;
+            for (ObjectGuid guid : context->GetValue<GuidVector>("possible rpg targets")->Get())
+            {
+                if (ignored.count(guid))
+                    continue;
+                Creature* npc = ObjectAccessor::GetCreature(*player, guid);
+                if (!npc || !npc->IsInWorld() || npc->IsDuringRemoveFromWorld() || !npc->IsAlive() ||
+                    npc->GetCharmerGUID() || npc->GetReactionTo(player) <= REP_UNFRIENDLY ||
+                    !player->InSamePhase(npc) || npc->GetZoneId() != player->GetZoneId() ||
+                    !player->IsWithinLOSInMap(npc))
+                    continue;
+
+                bool repairs = needsRepair && npc->HasNpcFlag(UNIT_NPC_FLAG_REPAIR);
+                bool vendor = needsSell && npc->HasNpcFlag(UNIT_NPC_FLAG_VENDOR);
+                float distance = player->GetExactDist(npc);
+                if (PreferNativeService(repairs, vendor, distance, nearestRepairs, nearestDistance))
+                {
+                    nearest = npc;
+                    nearestDistance = distance;
+                    nearestRepairs = repairs;
+                }
+            }
+            if (nearest)
+            {
+                resident.NativeServiceTarget = nearest->GetGUID();
+                targetValue->Set(GuidPosition(nearest));
+                context->GetValue<std::string>("next rpg action")->Set("choose rpg target");
+            }
+            return;
+        }
+        ObjectGuid guid = target;
+        Creature* npc = ObjectAccessor::GetCreature(*player, guid);
+        if (!npc || !npc->IsAlive() || !player->InSamePhase(npc) ||
+            npc->GetZoneId() != player->GetZoneId() || !player->IsWithinLOSInMap(npc))
+            return;
+
+        // Sell and train are native actions absent from the strategy's trigger list.
+        if (needsSell && player->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_VENDOR))
+        {
+            resident.NextMoveAt = now + 30;
+            ai->DoSpecificAction("rpg sell", Event(), true);
+        }
+        else if (_actTrainer && !ai->GetMaster() &&
+            player->GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_TRAINER) && context->GetValue<bool>("can train")->Get())
+        {
+            resident.NextMoveAt = now + 30;
+            ObjectGuid previousSelection = player->GetTarget();
+            player->SetSelection(guid);
+            ai->DoSpecificAction("rpg train", Event(), true);
+            if (player->GetTarget() == guid)
+                player->SetSelection(previousSelection);
+        }
+    }
+
     void Manager::ApplyCityStrategies(Player* player, Resident& resident) const
     {
         if (PlayerbotAI* ai = GET_PLAYERBOT_AI(player))
@@ -2608,33 +2758,18 @@ namespace CityLife
                 resident.Journal.OriginalNonCombatStrategies = beforeStrategies;
             }
 
-            std::string strategiesToApply = _nonCombatStrategies;
-            if (!_chatScriptedConversations && !_chatGreetings && !_chatUnrestricted)
+            std::string strategiesToApply = resident.NativeRpg ?
+                "+rpg,-new rpg,-stay,-grind,-travel,-move random" : _nonCombatStrategies;
+            if (!resident.NativeRpg && !_chatScriptedConversations && !_chatGreetings && !_chatUnrestricted)
                 strategiesToApply += ",-chat,-emote";
 
             ai->ChangeStrategy(strategiesToApply, BOT_STATE_NON_COMBAT);
 
             std::vector<std::string> afterStrategies = ai->GetStrategies(BOT_STATE_NON_COMBAT);
 
-            // Record actual additions (including native sibling side effects):
-            for (std::string const& s : afterStrategies)
-            {
-                if (std::find(beforeStrategies.begin(), beforeStrategies.end(), s) == beforeStrategies.end())
-                {
-                    if (std::find(resident.Journal.AppliedStrategies.begin(), resident.Journal.AppliedStrategies.end(), s) == resident.Journal.AppliedStrategies.end())
-                        resident.Journal.AppliedStrategies.push_back(s);
-                }
-            }
-
-            // Record actual removals (including native sibling side effects):
-            for (std::string const& s : beforeStrategies)
-            {
-                if (std::find(afterStrategies.begin(), afterStrategies.end(), s) == afterStrategies.end())
-                {
-                    if (std::find(resident.Journal.RemovedStrategies.begin(), resident.Journal.RemovedStrategies.end(), s) == resident.Journal.RemovedStrategies.end())
-                        resident.Journal.RemovedStrategies.push_back(s);
-                }
-            }
+            // Include actual sibling strategy changes made by the native engine.
+            RecordStrategyDelta(beforeStrategies, afterStrategies, resident.Journal.AppliedStrategies,
+                resident.Journal.RemovedStrategies);
         }
     }
 
@@ -2667,6 +2802,17 @@ namespace CityLife
         PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
         if (!ai)
             return;
+
+        if (resident.NativeServiceTarget)
+        {
+            auto* context = ai->GetAiObjectContext();
+            auto* target = context->GetValue<GuidPosition>("rpg target");
+            if (static_cast<ObjectGuid>(target->Get()) == resident.NativeServiceTarget)
+            {
+                target->Set(GuidPosition());
+                context->GetValue<std::string>("next rpg action")->Set("");
+            }
+        }
 
         PositionMap& positions = ai->GetAiObjectContext()->GetValue<PositionMap&>("position")->Get();
         PositionInfo stay = positions["stay"];
@@ -2716,6 +2862,14 @@ namespace CityLife
     {
         _queryProcessor.ProcessReadyCallbacks();
         _transactionProcessor.ProcessReadyCallbacks();
+        std::unordered_set<uint32> departures;
+        {
+            std::lock_guard<std::mutex> lock(_departureMutex);
+            departures.swap(_departures);
+        }
+        for (uint32 guid : departures)
+            RemoveResident(guid);
+
         PlayerbotsLife::ResolveAdmissionRequests(GameTimeSeconds());
         bool managementTick = _timerMs <= diff;
         if (managementTick)
@@ -3229,6 +3383,21 @@ namespace CityLife
                 return "Teleporting";
         }
 
+        if (!p)
+            return "Offline / transferring";
+        if (res.NativeRpg)
+        {
+            if (Spell* spell = p->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+                if (spell->GetSpellInfo() && spell->GetSpellInfo()->SpellName[0])
+                    return "Casting " + std::string(spell->GetSpellInfo()->SpellName[0]);
+            std::string action = PlayerbotsLife::LastSuccessfulBotAction(p);
+            if (!action.empty())
+                return action;
+            if (p->isMoving())
+                return "Moving";
+            return p->IsInCombat() ? "In combat" : "No action sampled";
+        }
+
         if (res.Activity == CitizenActivity::ReleaseCycle)
             return "Resting in Bed";
 
@@ -3357,27 +3526,30 @@ namespace CityLife
                     loc = hub->Name;
             }
 
-            std::string act = GetActivityNameString(res.Activity);
+            std::string act = res.NativeRpg ? "Native RPG" : GetActivityNameString(res.Activity);
             std::string roleStr = GetRoleNameString(res.Role);
             std::string lastAct = ResolveCityAction(res, p, spot);
             if (lastAct.size() > 32)
                 lastAct = lastAct.substr(0, 32);
 
-            std::string nextT = "Relocate to next POI";
+            std::string nextT = res.NativeRpg ? "Native AI decides" : "Relocate to next POI";
             if (res.Activity == CitizenActivity::CrowdSocial)
                 nextT = "Social crowd dialogue";
             else if (res.Activity == CitizenActivity::ReleaseCycle)
                 nextT = "Conclude residence session";
 
             int32 dueMs = 0;
-            if (res.NextMoveAt > nowSec)
+            if (!res.NativeRpg && res.NextMoveAt > nowSec)
                 dueMs = static_cast<int32>((res.NextMoveAt - nowSec) * 1000);
 
-            std::string truth = "Deadline";
+            std::string truth = res.NativeRpg ? "Observed" : "Deadline";
             std::string status = "Active";
             if (res.Activity == CitizenActivity::ReleaseCycle) status = "Resting";
             else if (res.Sitting) status = "Sitting";
             else if (!res.AtSpot) status = "Patrolling";
+
+            if (res.NativeRpg)
+                status = !p ? "Unavailable" : p->IsInCombat() ? "In combat" : p->isMoving() ? "Moving" : "Resident";
 
             // Format: guid|name|module|classId|level|faction|location|activity|lastAction|nextTask|dueMs|truthClass|status|x|y|z|zone|role
             char rec[512];
@@ -3429,7 +3601,7 @@ namespace CityLife
             if (strategies.empty())
                 strategies = "None";
 
-            lastActions = ai->HandleRemoteCommand("action");
+            lastActions = PlayerbotsLife::LastSuccessfulBotAction(player);
             if (lastActions.empty())
                 lastActions = "None";
         }

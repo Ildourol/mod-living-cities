@@ -1,5 +1,5 @@
 ###################################################################################################
-# City Life Module (mod-playerbots-city-life)
+# Living Cities Module (mod-living-cities)
 # Copyright (C) 2026 iCore
 # SPDX-License-Identifier: GPL-2.0-or-later
 ###################################################################################################
@@ -69,10 +69,10 @@ CityLife.Population.RealPlayerPresenceScale = 1.0
 CityLife.Population.MaxChangesPerTick = 3
 
 ###################################################################################################
-# Compatibility & Coexistence with mod-playerbots-pvp-life
+# Compatibility & Coexistence with mod-world-conflicts
 ###################################################################################################
 
-# Master switch for cross-module coexistence with mod-playerbots-pvp-life.
+# Master switch for cross-module coexistence with mod-world-conflicts.
 # Enables mutual anti-stealing reservation checks and system presence flags.
 # Default: 1 (Enabled)
 CityLife.Compatibility.PvPLife.EnableHarmony = 1
@@ -107,7 +107,7 @@ CityLife.Bots.SkipGrouped = 1
 # Keep disabled in standard random bot environments. If enabled, bots may be excluded due to BotActiveAlone.
 CityLife.Bots.RespectPlayerbotActivity = 0
 
-# Return bots to their original locations when released from city resident assignment.
+# Return bots to their original locations when released in scripted activity mode.
 CityLife.Bots.ReturnWhenReleased = 1
 
 ###################################################################################################
@@ -168,7 +168,12 @@ CityLife.Weight.Wander = 10
 CityLife.Weight.Shrine = 5
 CityLife.Weight.Patrol = 8
 
-# Non-combat strategy string applied to resident bots.
+# Use local Playerbots RPG for city residents. Admission requires a bot already in the hub.
+# The bot engine owns NPC selection, movement and its usual shop, repair and quest decisions.
+# Set to 0 to use the scripted points of interest and activities below.
+CityLife.Strategies.NativeRpg = 1
+
+# Non-combat strategy string used in scripted activity mode.
 CityLife.Strategies.NonCombat = "+stay,-follow,-passive,-grind,-rpg,-travel,-duel,-pvp,-chat,-emote"
 
 ###################################################################################################
@@ -256,7 +261,7 @@ CityLife.Chat.Unrestricted = 0
 CityLife.Chat.RandomSayChance = 0
 CityLife.Chat.SayCooldownSec = 30
 
-# Enable economic interactions (trading, food purchasing).
+# Enable module-managed economic interactions. Playerbots decides its own RPG purchases and repairs.
 CityLife.Interactions.Enable = 1
 CityLife.Interactions.PlayerTrading = 0
 CityLife.Interactions.BuyFood = 1

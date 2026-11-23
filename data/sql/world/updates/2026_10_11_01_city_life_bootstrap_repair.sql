@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Idempotent Bootstrap, Schema Repair & POI Normalization Migration
 -- Targets AzerothCore WORLD Database (MySQL 8.0 / 8.4 compatible)
 

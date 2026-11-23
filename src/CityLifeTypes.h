@@ -9,6 +9,7 @@
 
 #include "Define.h"
 #include "LifeBotReservation.h"
+#include "ObjectGuid.h"
 
 #include <string>
 #include <vector>
@@ -180,6 +181,8 @@ namespace CityLife
         uint32 NextReservationRefreshAt = 0;
         uint32 ReleaseAt = 0;
         bool Stationary = false;
+        bool NativeRpg = true;
+        ObjectGuid NativeServiceTarget;
 
         // Unified Activity & Role State
         CitizenRole Role = CitizenRole::Flex;

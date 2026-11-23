@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Extended POIs and Schema Migration (Ported from mod-city-bots)
 -- Idempotent script for AzerothCore WORLD database.
 

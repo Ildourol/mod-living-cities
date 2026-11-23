@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Civic POIs Migration: Seeding Class Trainers, Food Vendors, Taverns, and Inn Beds across capitals
 -- Idempotent script for AzerothCore WORLD database.
 

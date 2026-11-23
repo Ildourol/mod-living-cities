@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Optional Guard Ambiance SmartAI Scripts
 -- Apply to AzerothCore WORLD database for optional guard flavor.
 

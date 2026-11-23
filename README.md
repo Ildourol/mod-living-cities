@@ -1,13 +1,13 @@
-# City Life (Comprehensive Autonomous Urban Population & Roleplay)
+# Living Cities (Comprehensive Autonomous Urban Population & Roleplay)
 
-![City Life Banner](assets/banner.png)
+![Living Cities Banner](assets/banner.png)
 
-Repository/module name: `mod-playerbots-city-life`  
+Repository/module name: `mod-living-cities`  
 Created by **iCore**. Incorporates 100% of capabilities and micro-behaviors from `mod-city-bots`.
 
-City Life populates capitals, towns, and popular social hubs with configurable AzerothCore Playerbots. It makes cities feel lively, bustling, and immersive: residents wander between districts, shop at market stalls, socialize in taverns, visit class trainers, fish along city waterways, and patronize auction houses and banks.
+Living Cities populates capitals, towns, and popular social hubs with configurable AzerothCore Playerbots. It makes cities feel lively, bustling, and immersive: residents wander between districts, shop at market stalls, socialize in taverns, visit class trainers, fish along city waterways, and patronize auction houses and banks.
 
-**Single Installed Module Requirement:** Users install only `mod-playerbots-city-life` alongside AzerothCore and `mod-playerbots`. `mod-city-bots` is completely unnecessary and should not be installed or enabled.
+**Single Installed Module Requirement:** Users install only `mod-living-cities` alongside AzerothCore and `mod-playerbots`. `mod-city-bots` is completely unnecessary and should not be installed or enabled.
 
 ---
 
@@ -20,13 +20,13 @@ City Life populates capitals, towns, and popular social hubs with configurable A
 - **Canal Water Avoidance:** Automated terrain and water-depth detection prevents bots from falling into Stormwind canals or drowning, automatically snapping waypoints to dry quays and stone bridges.
 - **Weighted Hotspot Distribution:** Dynamic distribution across functional categories: `auction`, `bank`, `mail`, `flight`, `square`, `tavern`, `trainer`, `dock`, and `travel`.
 - **Time-of-Day Dynamic Scaling:** Realistic morning, daytime, evening, and nighttime population curves with gradual arrivals and departures.
-- **Mutual Anti-Stealing Reservation Barrier:** Thread-safe, standalone-safe shared reservation registry (`PlayerbotsLife::ReservationRegistry`) ensuring bots reserved by City Life are never stolen or commanded by `mod-playerbots-pvp-life`, and vice versa.
+- **Mutual Anti-Stealing Reservation Barrier:** Thread-safe, standalone-safe shared reservation registry (`PlayerbotsLife::ReservationRegistry`) ensuring bots reserved by Living Cities are never stolen or commanded by `mod-world-conflicts`, and vice versa.
 - **Conservative Population Borrowing Budget:** Strict default cap of 10% eligible pool / 120 bots max (configured for a 1,000-bot server) guarantees that ≥ 80% (800+ bots) of random playerbots remain completely free to roam, quest, run dungeons, and engage in open-world activities.
 - **Zero Bot Tampering Invariant:** Bots are borrowed strictly AS-IS from the natural Playerbot pool with zero artificial level modifications, zero talent changes, and zero stat inflation.
 - **Zero GM Spam Protection:** Game Masters and administrators are strictly exempt from unsolicited whispers or broadcasts.
 - **Silent-by-Default Operation:** All ambient speech, scripted dialogues, and greetings default to OFF (`0`) in config for a completely unobtrusive server experience out of the box.
 - **Instant Disengagement on Invite or Logout:** Residents immediately drop city behaviors if invited to a player group, commanded by an owner, or logged out.
-- **Coexistence with `mod-playerbots-pvp-life`:** Capital gate dueling is unified under `mod-playerbots-pvp-life`, with both modules cooperating via shared reservation registry without contention.
+- **Coexistence with `mod-world-conflicts`:** Capital gate dueling is unified under `mod-world-conflicts`, with both modules cooperating via shared reservation registry without contention.
 - **Comprehensive GM Commands:** Real-time runtime tools for tuning hubs, recording exact hotspot coordinates in-game, and monitoring system health.
 
 ---
@@ -42,23 +42,23 @@ City Life populates capitals, towns, and popular social hubs with configurable A
 
 ## Installation & Setup
 
-1. Place `mod-playerbots-city-life` into your `modules/` directory:
+1. Place `mod-living-cities` into your `modules/` directory:
    ```text
-   azerothcore-wotlk/modules/mod-playerbots-city-life
+   azerothcore-wotlk/modules/mod-living-cities
    ```
 2. Apply the schema and seed data to your **WORLD** database:
    ```bash
    mysql -u root -p acore_world < data/sql/manual/world_city_life.sql
    ```
 3. Re-run CMake and rebuild AzerothCore.
-4. Copy `conf/mod_playerbots_city_life.conf.dist` to `mod_playerbots_city_life.conf` in your worldserver config directory and customize settings.
-5. Start worldserver and look for `>> Loaded mod-playerbots-city-life` in your startup log.
+4. Copy `conf/mod_living_cities.conf.dist` to `mod_living_cities.conf` in your worldserver config directory and customize settings.
+5. Start worldserver and look for `>> Loaded mod-living-cities` in your startup log.
 
 ---
 
-## Coexistence with `mod-playerbots-pvp-life`
+## Coexistence with `mod-world-conflicts`
 
-`mod-playerbots-city-life` and `mod-playerbots-pvp-life` are architected for seamless, zero-conflict simultaneous execution:
+`mod-living-cities` and `mod-world-conflicts` are architected for seamless, zero-conflict simultaneous execution:
 - **Zero Feature Suppression:** Neither module disables or yields any feature for the other.
 - **Concurrent Capital Gate Duels:** Both modules host dueling outside city gates simultaneously. Each module pairs and manages only its own claimed bots.
 - **Candidate Scanning Isolation:** During candidate scanning, each module verifies `!PlayerbotsLife::IsReserved(guid)` before borrowing a bot.
@@ -92,7 +92,7 @@ All administrative commands use the `.citylife` root:
 
 ## Scope & Philosophy
 
-City Life intentionally does not:
+Living Cities intentionally does not:
 - Create auction listings or buy items from real players;
 - Simulate banking or mailbox transactions;
 - Create or force-login offline characters;
@@ -105,6 +105,6 @@ Its focus is singular and polished: bring Azeroth's cities to vibrant, believabl
 
 ## Credits & Attribution
 
-- **City Life Architecture & Implementation:** Created by **iCore**.
+- **Living Cities Architecture & Implementation:** Created by **iCore**.
 - **Micro-Behaviors & Waypoint Navigation:** Ported and expanded from `mod-city-bots`.
-- **Cross-Module Reservation Protocol:** Designed for the Playerbots Life ecosystem (`mod-playerbots-city-life`, `mod-playerbots-pvp-life`, `mod-playerbots-artisans`).
+- **Cross-Module Reservation Protocol:** Designed for the Playerbots Life ecosystem (`mod-living-cities`, `mod-world-conflicts`, `mod-playerbots-artisans`).

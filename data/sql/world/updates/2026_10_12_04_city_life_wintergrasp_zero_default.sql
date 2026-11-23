@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Set default population and status for Wintergrasp hubs to 0 (disabled)
 -- Ensures no bots are deployed to Wintergrasp camps by default.
 -- Idempotent script for AzerothCore WORLD database.

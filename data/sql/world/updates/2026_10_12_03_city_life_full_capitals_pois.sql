@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Full Capitals Civic POI Expansion Migration
 -- Seeds canonical POIs (Banks, Auction Houses, Mailboxes, Taverns, Plazas, Trainers, Vendors, Docks)
 -- across Ironforge, Undercity, Darnassus, Exodar, Thunder Bluff, Silvermoon, Shattrath, and Dalaran.

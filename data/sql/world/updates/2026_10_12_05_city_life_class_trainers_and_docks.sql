@@ -1,4 +1,4 @@
--- mod-playerbots-city-life
+-- mod-living-cities
 -- Seed canonical class trainer districts and dock POIs across all major capitals
 -- Matches fallback POI registry from mod-city-bots
 -- Idempotent script for AzerothCore WORLD database.
